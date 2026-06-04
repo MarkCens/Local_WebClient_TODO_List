@@ -1,0 +1,1545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>TODO List</title>
+    <link rel="icon" href="/static/img/icon_todo_logo.svg" type="image/svg+xml">
+    <style>
+        :root {
+            --bg-dark: #0a0f18;
+            --card-bg: #151b2b;
+            --text-main: #ffffff;
+            --text-muted: #6b7280;
+            --border-color: #2d3748;
+            --neon-cyan: #00ffff;
+            --neon-pink: #e838cc;
+
+            /* 重构优先级颜色：红 -> 橙 -> 黄 -> 白 */
+            --p1-color: #FF0060; /* 亮红 */
+            --p2-color: #00FFDE; /* 亮橙 */
+            --p3-color: #FFE8BE; /* 淡黄 */
+            --p4-color: #ffffff; /* 纯白 */
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Consolas, sans-serif;
+            margin: 0;
+            padding: 20px 40px 80px 40px;
+        }
+
+        .header-controls {
+            /* 👇 核心新增：吸顶固定特效 */
+            position: sticky;
+            top: 0; /* 紧贴浏览器视口顶部 */
+            background-color: var(--bg-dark); /* 必须加上与网页一致的背景色，否则滚动时文字会重叠 */
+            z-index: 100; /* 保证它永远盖在任务列表上方 */
+            padding-top: 20px; /* 吸收掉原本 body 的顶部留白 */
+            margin-top: -20px; /* 抵消 body 的内边距，让它真正“焊死”在浏览器最顶端 */
+
+            /* 👇 以下是原有的布局属性，保持不变 */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .left-section, .right-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .year-selector {
+            display: flex;
+            align-items: center;
+            background: #1f2937;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 4px 10px;
+            gap: 10px;
+            height: 24px;
+        }
+
+        .year-text {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--text-main);
+        }
+
+        .year-btn {
+            background: transparent;
+            border: none;
+            color: var(--neon-cyan);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0 4px;
+        }
+
+        .year-btn:disabled {
+            color: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .tag-group {
+            display: flex;
+            gap: 6px;
+        }
+
+        .tag {
+            background: #1f2937;
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-muted);
+            user-select: none;
+        }
+
+        .tag.active {
+            background: rgba(0, 255, 255, 0.1);
+            border-color: var(--neon-cyan);
+            color: var(--neon-cyan);
+            font-weight: bold;
+        }
+
+        .board-columns {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            width: 100%;
+        }
+
+        .month-col {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.01);
+            border-radius: 6px;
+            padding: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .month-title {
+            text-align: center;
+            color: var(--neon-cyan);
+            font-weight: bold;
+            padding-bottom: 10px;
+            border-bottom: 1px dashed var(--border-color);
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .task-row {
+            display: flex;
+            align-items: center;
+            background: var(--card-bg);
+            padding: 8px 12px;
+            border-radius: 4px;
+            gap: 10px;
+            border: 1px solid transparent;
+            transition: border 0.2s;
+            cursor: default;
+        }
+
+        .task-row:hover {
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .task-row.selected-row {
+            border-color: var(--neon-cyan);
+            background: rgba(0, 255, 255, 0.05);
+        }
+
+        /* ======== 拖拽特效 CSS ======== */
+        .task-row.draggable-enabled:hover {
+            box-shadow: 0 0 8px rgba(0, 255, 255, 0.1);
+        }
+
+        .drag-handle {
+            min-width: 25px;
+            font-family: Consolas;
+            color: var(--neon-cyan);
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            user-select: none; /* 防止拖拽时误选中文字 */
+        }
+
+        .drag-handle.can-drag {
+            cursor: grab;
+        }
+
+        .drag-handle.can-drag:active {
+            cursor: grabbing;
+        }
+
+        .task-row.drag-over-top {
+            box-shadow: 0 -2px 0 var(--neon-cyan);
+            z-index: 10;
+        }
+
+        .task-row.drag-over-bottom {
+            box-shadow: 0 2px 0 var(--neon-cyan);
+            z-index: 10;
+        }
+
+        /* 复选框：纯正横向的一字贯穿删除线 */
+        .cyber-checkbox {
+            appearance: none;
+            width: 15px;
+            height: 15px;
+            margin-right: 5px;
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            cursor: pointer;
+            flex-shrink: 0;
+            background: transparent;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .cyber-checkbox:checked {
+            border-color: var(--text-muted);
+            opacity: 0.6;
+        }
+
+        .cyber-checkbox:checked::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: -3px;
+            right: -3px;
+            height: 2px;
+            background-color: var(--text-muted);
+            transform: translateY(-50%);
+        }
+
+        .task-name-container {
+            flex: 1;
+        }
+
+        .inline-input {
+            background: transparent;
+            border: 1px dashed transparent;
+            width: 100%;
+            outline: none;
+            font-size: 14px;
+        }
+
+        .inline-input:focus {
+            border-bottom: 1px dashed var(--neon-cyan);
+        }
+
+        /* 宽度拉长至85px，彻底解决 5/10 日期显示被截断的问题 */
+        .date-input {
+            width: 85px;
+            text-align: center;
+        }
+
+        .priority-btn {
+            border: 1px solid currentColor;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            user-select: none;
+            width: 25px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .priority-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .p1-text {
+            color: var(--p1-color) !important;
+            font-weight: bold !important;
+        }
+
+        .p2-text {
+            color: var(--p2-color) !important;
+            font-weight: bold !important;
+        }
+
+        .p3-text {
+            color: var(--p3-color) !important;
+            font-weight: bold !important;
+        }
+
+        .p4-text {
+            color: var(--p4-color) !important;
+            font-weight: normal !important;
+        }
+
+        .strike {
+            text-decoration: line-through;
+            text-decoration-color: rgba(255, 255, 255, 0.9);
+        }
+
+        .btn {
+            background: #1f2937;
+            color: white;
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .btn:hover {
+            border-color: var(--neon-cyan);
+        }
+
+        .action-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #ff4d4f;
+            padding: 0;
+        }
+
+        /* 图标按钮样式：无边框无背景，悬浮变大 */
+        .icon-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s ease;
+            outline: none;
+        }
+
+        .icon-btn:hover {
+            transform: scale(1.15);
+        }
+
+        .icon-btn img {
+            width: 18px;
+            height: 18px;
+        }
+
+        /* 统计数字的布局 */
+        .stat-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .stat-group img {
+            width: 16px; /* 从20px缩小 */
+            height: 16px;
+        }
+
+        /* 日历视图布局 */
+        .calendar-view {
+            display: none;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 10px;
+        }
+
+        .calendar-day {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            min-height: 120px;
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        .calendar-date {
+            font-size: 12px;
+            color: var(--neon-cyan);
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        .calendar-task-item {
+            font-size: 12px;
+            padding: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            margin-bottom: 4px;
+            border-radius: 3px;
+        }
+
+        .tech-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(5, 8, 15, 0.75);
+            backdrop-filter: blur(5px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .tech-modal-overlay.show {
+            display: flex;
+        }
+
+        .tech-modal {
+            background: #0B111E;
+            border: 1px solid var(--neon-cyan);
+            padding: 30px;
+            border-radius: 4px;
+            box-shadow: 0 0 20px rgba(0, 240, 255, 0.2);
+            text-align: center;
+            min-width: 350px;
+        }
+
+        .modal-btns {
+            margin-top: 30px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .modal-btns button {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .modal-btns .confirm-btn {
+            background: rgba(232, 56, 204, 0.1);
+            border-color: var(--neon-pink);
+            color: var(--neon-pink);
+        }
+
+        /* ======== 全局暗黑科技风滚动条 ======== */
+        ::-webkit-scrollbar {
+            width: 6px; /* 垂直滚动条的极细宽度 */
+            height: 6px; /* 水平滚动条的极细高度 */
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2); /* 轨道背景：极暗的透明黑 */
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 240, 255, 0.2); /* 滑块：默认微微发出的幽暗青光 */
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 240, 255, 0.6); /* 滑块悬浮：青光变亮，确认感拉满 */
+            box-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+        }
+
+        ::-webkit-scrollbar-corner {
+            background: transparent; /* 右下角交汇处透明 */
+        }
+
+        /* ======== 远期目标控件 CSS ======== */
+        .lt-goal-container {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            padding: 4px 8px;
+            border-radius: 6px;
+            margin-right: 15px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            /* 👇 核心修改：写死宽度 (170px刚好够放10个汉字)，并设为相对定位 */
+            width: 220px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .lt-goal-container:hover {
+            border-color: rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 8px rgba(0, 255, 255, 0.05);
+        }
+
+        .lt-goal-input {
+            flex: 1;
+            min-width: 0; /* 防止文本过长撑破容器 */
+            color: var(--p1-color);
+            font-size: 13px;
+            text-align: left;
+            font-weight: bold;
+            transition: color 0.2s;
+            cursor: pointer;
+            padding-left: 2px;
+        }
+
+        .lt-goal-input.is-completed {
+            color: var(--text-muted);
+            font-weight: normal;
+            text-decoration: line-through;
+            text-decoration-color: rgba(255, 255, 255, 0.4);
+        }
+
+        /* 悬浮操作区的动画折叠效果 */
+        .lt-goal-actions {
+            position: absolute;
+            right: 4px;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            /* 👇 利用深色背景和阴影遮挡底部的长文字，防止图标和文字重叠在一起看不清 */
+            background: #0f1520;
+            padding-left: 6px;
+            box-shadow: -6px 0 8px #0f1520;
+        }
+
+        .lt-goal-actions .tiny-btn {
+            padding: 2px;
+        }
+
+        .lt-goal-actions .tiny-btn:hover img {
+            transform: scale(1.15);
+        }
+
+        /* 统一远期目标控件内的所有图标大小，强制 16px 并保持比例 */
+        .lt-goal-container img {
+            width: 16px !important;
+            height: 16px !important;
+            object-fit: contain;
+            display: block;
+            transition: transform 0.2s ease; /* 确保悬浮放大时有丝滑动画 */
+        }
+
+        /* 2. 核心黑科技：无视内部留白，直接进行视觉上的精准膨胀 */
+        img[alt="Compass"] {
+            transform: scale(1.86);
+        }
+
+        img[alt="Delete"] {
+            transform: scale(1.86);
+        }
+
+        img[alt="Add"] {
+            transform: scale(0.96);
+        }
+
+        img[alt="Finish"] {
+            transform: scale(0.9);
+        }
+
+        img[alt="Next"] {
+            transform: scale(0.9);
+        }
+
+        /* 3. 核心修改：鼠标悬浮时，在基础数值上乘以 1.2倍 */
+        /* Delete: 1.86 * 1.2 = 2.232 */
+        .lt-goal-actions .tiny-btn:hover img[alt="Delete"] {
+            transform: scale(2.232);
+        }
+
+        /* Add: 0.96 * 1.2 = 1.152 */
+        .lt-goal-actions .tiny-btn:hover img[alt="Add"] {
+            transform: scale(1.152);
+        }
+
+        /* Finish: 0.9 * 1.2 = 1.08 */
+        .lt-goal-actions .tiny-btn:hover img[alt="Finish"] {
+            transform: scale(1.08);
+        }
+
+        /* Next: 0.9 * 1.2 = 1.08 */
+        .lt-goal-actions .tiny-btn:hover img[alt="Next"] {
+            transform: scale(1.08);
+        }
+
+        /* 3. 展开区的宽度微调，确保图标膨胀后彼此之间不会拥挤 */
+        .lt-goal-container:hover .lt-goal-actions {
+            opacity: 1;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header-controls">
+    <div class="left-section">
+        <div class="year-selector">
+            <span class="year-text" id="display-year">2026</span>
+            <button class="year-btn" id="btn-prev-year" onclick="changeYear(-1)">▼</button>
+            <button class="year-btn" id="btn-next-year" onclick="changeYear(1)">▲</button>
+        </div>
+
+        <div class="tag-group" id="quarter-tags"></div>
+        <div class="tag-group" id="month-tags" style="display: none;"></div>
+    </div>
+
+    <div class="right-section" id="tools-section">
+        <span id="shortcut-hint" style="color:var(--text-muted); font-size:12px; margin-right: 15px;">快捷键: Ctrl+Alt+N 新建任务</span>
+
+        <div class="lt-goal-container" id="lt-goal-container">
+            <img src="/static/img/icon_compass.svg" class="lt-icon" alt="Compass">
+
+            <input type="text" id="lt-goal-input" class="inline-input lt-goal-input" value="暂无远期目标" readonly
+                   onclick="this.removeAttribute('readonly'); this.focus();"
+                   onblur="this.setAttribute('readonly', true); updateGoalName(this.value);"
+                   onkeydown="if(event.key==='Enter') this.blur();">
+
+            <div class="lt-goal-actions">
+                <button class="icon-btn tiny-btn" onclick="completeGoal()" title="标记完成" id="lt-btn-done"
+                        style="display:none;">
+                    <img src="/static/img/icon_ready_finish.svg" alt="Finish">
+                </button>
+                <button class="icon-btn tiny-btn" onclick="addGoal()" title="新增远期目标">
+                    <img src="/static/img/icon_add.svg" alt="Add">
+                </button>
+                <button class="icon-btn tiny-btn" onclick="cycleGoal()" title="切换远期目标" id="lt-btn-next"
+                        style="display:none;">
+                    <img src="/static/img/icon_next.svg" alt="Next">
+                </button>
+                <button class="icon-btn tiny-btn" onclick="promptDeleteGoal()" title="删除目标" id="lt-btn-del" style="display:none;">
+                    <img src="/static/img/icon_delete.svg" alt="Delete">
+                </button>
+            </div>
+        </div>
+
+        <div class="stat-group" title="已完成">
+            <img src="/static/img/icon_done.svg" alt="Done" style="width: 15px; height: 15px;">
+            <span id="stat-done">0</span>
+        </div>
+
+        <div class="stat-group" title="本月已完成">
+            <img src="/static/img/icon_done_month.svg" alt="Done Month" style="width: 17px; height: 17px;">
+            <span id="stat-done-month">0</span>
+        </div>
+
+        <div class="stat-group" title="未完成">
+            <img src="/static/img/icon_doing.svg" alt="Doing" style="width: 14px; height: 14px;">
+            <span id="stat-doing">0</span>
+        </div>
+
+        <button class="icon-btn" title="导出Excel备份" onclick="exportExcel()">
+            <img src="/static/img/icon_export_excel.svg" alt="Export" style="width: 16px; height: 16px;">
+        </button>
+
+        <button class="icon-btn" title="批量导入任务" onclick="document.getElementById('excelUpload').click()">
+            <img src="/static/img/icon_import.svg" alt="Import">
+        </button>
+        <input type="file" id="excelUpload" style="display: none;" accept=".xlsx" onchange="uploadExcel()">
+
+        <button class="icon-btn" title="切换月份日历" onclick="toggleView()" id="view-switch-btn">
+            <img src="/static/img/icon_calendar.svg" alt="Calendar" style="width: 16px; height: 16px;">
+        </button>
+    </div>
+</div>
+
+<!-- 列表视图 -->
+<div id="list-view" class="board-columns">
+    <div class="month-col">
+        <div class="month-title" id="m-title-1">-</div>
+        <div id="m-body-1" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+    <div class="month-col">
+        <div class="month-title" id="m-title-2">-</div>
+        <div id="m-body-2" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+    <div class="month-col">
+        <div class="month-title" id="m-title-3">-</div>
+        <div id="m-body-3" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+</div>
+
+<!-- 卡片日历视图 -->
+<div id="calendar-view" class="calendar-view"></div>
+
+<div class="tech-modal-overlay" id="delete-modal">
+    <div class="tech-modal">
+        <p style="color: var(--neon-cyan); font-family: Consolas; font-size: 16px; margin-bottom: 20px;">CONFIRMING DIALOG</p>
+        <p style="font-size: 14px; color: var(--text-main);">确认删除吗？</p>
+        <div class="modal-btns">
+            <button onclick="closeDeleteModal()">取消</button>
+            <button class="confirm-btn" onclick="executeDelete()">确认</button>
+        </div>
+    </div>
+</div>
+
+<div class="tech-modal-overlay" id="delete-goal-modal">
+    <div class="tech-modal">
+        <p style="color: var(--neon-cyan); font-family: Consolas; font-size: 16px; margin-bottom: 20px;">CONFIRMING DIALOG</p>
+        <p style="font-size: 14px; color: var(--text-main);">确认删除吗？</p>
+        <div class="modal-btns">
+            <button onclick="closeDeleteGoalModal()">取消</button>
+            <button class="confirm-btn" onclick="executeDeleteGoal()">确认</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentYear = new Date().getFullYear();
+    let currentQuarter = Math.floor((new Date().getMonth() + 3) / 3);
+    let currentMonth = new Date().getMonth() + 1;
+    let minYear = currentYear;
+    let maxYear = currentYear + 1;
+    let isCalendarView = false;
+    let tasksData = [];
+    let deleteTargetId = null;
+    let draggedTaskId = null; // 记录当前拖拽的任务ID
+    let isFirstLoad = true; // 用于判断是否为页面首次加载
+    let goalsData = [];
+    let currentGoalIndex = 0;
+    let revertGoalTimer = null; // 全局定时器
+    let delayedSortTimer = null; // 用于延迟排序的全局定时器
+
+    // 👇 判断是否为 Mac 并在页面加载时更新提示文字
+    const isMac = /macintosh|mac os x/i.test(navigator.userAgent);
+    window.addEventListener('DOMContentLoaded', () => {
+        const hintEl = document.getElementById('shortcut-hint');
+        if (hintEl) {
+            hintEl.textContent = isMac ? '快捷键: Cmd+Option+N 新建任务' : '快捷键: Ctrl+Alt+N 新建任务';
+        }
+    });
+
+    // 跨天自动校准机制
+    let lastActiveDate = new Date().toDateString(); // 记录当前日期
+    window.addEventListener('focus', () => {
+        const today = new Date();
+        // 每次网页重新获得焦点时，检查是否已经跨天/跨月
+        if (today.toDateString() !== lastActiveDate) {
+            lastActiveDate = today.toDateString();
+            currentYear = today.getFullYear();
+            currentMonth = today.getMonth() + 1;
+            currentQuarter = Math.floor((today.getMonth() + 3) / 3);
+            // 重新拉取一次元数据、任务和刷新 UI（不需要暴力刷新整个网页，体验丝滑）
+            initMeta();
+        }
+    });
+
+    // 改日期、勾选完成(延迟重排)
+    function scheduleDelayedSort() {
+        clearTimeout(delayedSortTimer);
+        delayedSortTimer = setTimeout(() => {
+            loadTasks();
+        }, 3000);
+    }
+
+    function checkAndRevertToPrincipal() {
+        clearTimeout(revertGoalTimer); // 每次触发前先清空之前的定时，防止冲突
+        revertGoalTimer = setTimeout(() => {
+            const input = document.getElementById('lt-goal-input');
+
+            // 核心保护：如果 5 秒后你居然还在修改文字（处于焦点状态），绝不打断你！
+            if (document.activeElement === input) return;
+
+            const principalIndex = goalsData.findIndex(g => g.is_principal_contradiction === 1);
+
+            // 只有当存在主要目标，且当前展示的的确不是主要目标时，才切回去
+            if (principalIndex !== -1 && currentGoalIndex !== principalIndex) {
+                currentGoalIndex = principalIndex;
+                renderCurrentGoal();
+            }
+        }, 5000); // 5000 毫秒 = 5 秒
+    }
+
+    async function initMeta() {
+        const res = await fetch('/api/meta');
+        const data = await res.json();
+        minYear = data.min_year;
+        currentYear = data.current_year;
+        maxYear = currentYear + 1;
+        updateYearUI();
+        renderTags();
+        loadTasks();
+        loadGoals();
+    }
+
+    function updateYearUI() {
+        document.getElementById('display-year').textContent = currentYear;
+        document.getElementById('btn-prev-year').disabled = (currentYear <= minYear);
+        document.getElementById('btn-next-year').disabled = (currentYear >= maxYear);
+    }
+
+    function changeYear(delta) {
+        const newYear = currentYear + delta;
+        if (newYear >= minYear && newYear <= maxYear) {
+            currentYear = newYear;
+            updateYearUI();
+            loadTasks();
+        }
+    }
+
+    function renderTags() {
+        const qContainer = document.getElementById('quarter-tags');
+        qContainer.innerHTML = '';
+        for (let i = 1; i <= 4; i++) {
+            const tag = document.createElement('div');
+            tag.className = `tag ${i === currentQuarter ? 'active' : ''}`;
+            tag.textContent = `第${i}季度`;
+            tag.onclick = () => {
+                currentQuarter = i;
+                renderTags();
+                renderBoard();
+            };
+            qContainer.appendChild(tag);
+        }
+
+        const mContainer = document.getElementById('month-tags');
+        mContainer.innerHTML = '';
+        for (let i = 1; i <= 12; i++) {
+            const tag = document.createElement('div');
+            tag.className = `tag ${i === currentMonth ? 'active' : ''}`;
+            tag.textContent = `${i}月`;
+            tag.onclick = () => {
+                currentMonth = i;
+                renderTags();
+                renderBoard();
+            };
+            mContainer.appendChild(tag);
+        }
+
+        qContainer.style.display = isCalendarView ? 'none' : 'flex';
+        mContainer.style.display = isCalendarView ? 'flex' : 'none';
+    }
+
+    async function loadTasks() {
+        const res = await fetch(`/api/tasks?year=${currentYear}`);
+        tasksData = await res.json();
+
+        const calRes = await fetch(`/api/calendar?year=${currentYear}`);
+        window.calendarData = await calRes.json();
+
+        renderWithAnimation(); // 渲染 DOM
+
+        // ======== 首次刷新页面自动滚动定位 ========
+        if (isFirstLoad) {
+            isFirstLoad = false; // 保证只有刷新网页时触发，切换年份时不乱滚
+
+            // 延迟 300ms 确保浏览器已经将 DOM 节点绘制到屏幕上
+            setTimeout(() => {
+                if (isCalendarView) return; // 如果在日历视图就不滚动
+
+                // 1. 找到全局第一个未完成的复选框 (没有 :checked 属性)
+                const firstUncompleted = document.querySelector('.cyber-checkbox:not(:checked)');
+
+                if (firstUncompleted) {
+                    const currentRow = firstUncompleted.closest('.task-row');
+                    const parentContainer = currentRow.parentElement;
+                    const rows = Array.from(parentContainer.children);
+                    const currentIndex = rows.indexOf(currentRow);
+
+                    // 2. 找到该项的“上 2 项”，如果上面不够 2 项，就取最顶部（第 0 项）
+                    const targetIndex = Math.max(0, currentIndex - 2);
+                    const targetRow = rows[targetIndex];
+
+                    if (targetRow) {
+                        // 3. 计算绝对滚动位置：目标相对视口顶部距离 + 当前滚动高度 - 60px(留点呼吸空间)
+                        const y = targetRow.getBoundingClientRect().top + window.scrollY - 60;
+                        window.scrollTo({top: y, behavior: 'smooth'});
+                    }
+                }
+            }, 300);
+        }
+        // ====================================================
+    }
+
+    // FLIP动画渲染
+    function renderWithAnimation() {
+        // 1. First: 记录渲染前所有任务的当前位置
+        const oldPositions = {};
+        document.querySelectorAll('.task-row').forEach(row => {
+            oldPositions[row.dataset.id] = row.getBoundingClientRect();
+        });
+
+        // 2. 正常执行原有的 DOM 渲染，将所有任务排到新的位置
+        renderBoard();
+
+        // 如果是日历视图，不执行平滑动画
+        if (isCalendarView) return;
+
+        // 3. Last & Invert & Play: 计算位置差并播放丝滑动画
+        document.querySelectorAll('.task-row').forEach(row => {
+            const id = row.dataset.id;
+            const oldRect = oldPositions[id];
+
+            if (oldRect) {
+                // 如果是老任务，计算它的位置变化
+                const newRect = row.getBoundingClientRect();
+                const deltaX = oldRect.left - newRect.left;
+                const deltaY = oldRect.top - newRect.top;
+
+                // 只有当位置真的发生变化时才做动画
+                if (deltaX !== 0 || deltaY !== 0) {
+                    // Invert: 瞬间通过 transform 把新创建的节点“骗”回老位置
+                    row.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+                    row.style.transition = 'none'; // 移动回老位置时不需要动画
+
+                    // 强制浏览器重绘 (Reflow)
+                    row.offsetHeight;
+
+                    // Play: 移除 transform，加上物理缓动，让它自己平滑地滑到新位置
+                    row.style.transition = 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)';
+                    row.style.transform = '';
+
+                    // 动画结束后清理内联样式，防止干扰后续的拖拽和 Hover
+                    setTimeout(() => {
+                        row.style.transition = '';
+                    }, 500);
+                }
+            } else {
+                // 如果是全新增加的任务（Ctrl+Alt+N），给个淡入向上的入场动画
+                row.style.opacity = '0';
+                row.style.transform = 'translateY(10px)';
+                row.offsetHeight;
+                row.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+                row.style.opacity = '1';
+                row.style.transform = '';
+                setTimeout(() => {
+                    row.style.transition = '';
+                }, 400);
+            }
+        });
+    }
+
+    // 全局统计刷新函数 ========
+    function updateStats() {
+        // 计算全年统计
+        const doneCount = tasksData.filter(t => t.is_completed === 1).length;
+        const doingCount = tasksData.filter(t => t.is_completed === 0).length;
+
+        // 👇 核心计算：获取当前“所选月份”的已完成任务数
+        const doneMonthCount = tasksData.filter(t =>
+            t.is_completed === 1 &&
+            t.date &&
+            parseInt(t.date.substring(5, 7)) === currentMonth
+        ).length;
+
+        // 统一更新到页面上
+        document.getElementById('stat-done').textContent = doneCount;
+        document.getElementById('stat-doing').textContent = doingCount;
+        document.getElementById('stat-done-month').textContent = doneMonthCount;
+    }
+
+    function renderBoard() {
+        updateStats();
+        if (isCalendarView) renderCalendarView();
+        else renderListView();
+    }
+
+    function formatDateDisplay(dateStr) {
+        if (!dateStr || dateStr.endsWith('-99')) return '';
+        let parts = dateStr.split('-');
+        return `${parts[0]}-${parseInt(parts[1])}-${parseInt(parts[2])}`;
+    }
+
+    function getHintDate(dateStr) {
+        // 如果没有具体日期 (待定 -99)，提示当天日期
+        if (!dateStr || dateStr.endsWith('-99')) {
+            const today = new Date();
+            return `${today.getMonth() + 1}/${today.getDate()}`;
+        }
+        // 如果已经有日期，依然提示原来的日期
+        let parts = dateStr.split('-');
+        return `${parseInt(parts[1])}/${parseInt(parts[2])}`;
+    }
+
+    async function cyclePriority(id, currentP) {
+        let nextP;
+        if (currentP === 4) nextP = 3;
+        else if (currentP === 3) nextP = 2;
+        else if (currentP === 2) nextP = 1;
+        else nextP = 4;
+
+        await updateTask(id, 'priority', nextP);
+    }
+
+    // 处理勾选：不再隐藏复选框，直接赋 strike 划线样式
+    async function toggleComplete(id, isCompleted) {
+        const row = document.querySelector(`.task-row[data-id='${id}']`);
+        if (row) {
+            const targets = row.querySelectorAll('.inline-input, .priority-btn');
+            if (isCompleted) targets.forEach(el => el.classList.add('strike'));
+            else targets.forEach(el => el.classList.remove('strike'));
+        }
+
+        // 构造请求数据，如果勾选完成，顺带把 priority 设为 4
+        const payload = {is_completed: isCompleted ? 1 : 0};
+        if (isCompleted) {
+            payload.priority = 4;
+        }
+
+        await fetch(`/api/tasks/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+
+        const task = tasksData.find(t => t.id === id);
+        if (task) {
+            task.is_completed = isCompleted ? 1 : 0;
+            // 本地数据同步更新
+            if (isCompleted) task.priority = 4;
+        }
+
+        // 排序渲染(延时触发)
+        scheduleDelayedSort();
+    }
+
+    function renderListView() {
+        const startMonth = currentQuarter * 3 - 2;
+        const targetMonths = [startMonth, startMonth + 1, startMonth + 2];
+
+        for (let i = 0; i < 3; i++) {
+            let m = targetMonths[i];
+            document.getElementById(`m-title-${i + 1}`).textContent = `${m}月`;
+            const mBody = document.getElementById(`m-body-${i + 1}`);
+            mBody.innerHTML = '';
+
+            let monthTasks = tasksData.filter(t => parseInt(t.date.substring(5, 7)) === m);
+
+            monthTasks.forEach((task, index) => {
+                const visualId = index + 1;
+                const row = document.createElement('div');
+                row.className = `task-row`;
+                row.dataset.id = task.id;
+
+                const strikeClass = task.is_completed ? 'strike' : '';
+
+                // 判断当前任务是否符合可拖拽条件：未完成 && 待定日期(-99)
+                const isDraggable = !task.is_completed && task.date.endsWith('-99');
+                if (isDraggable) {
+                    row.classList.add('draggable-enabled');
+                    row.ondragover = (e) => handleDragOver(e, task.id);
+                    row.ondragleave = (e) => handleDragLeave(e);
+                    row.ondrop = (e) => handleDrop(e, task.id);
+                }
+
+                row.innerHTML = `
+                    <div class="${isDraggable ? 'drag-handle can-drag' : 'drag-handle'}"
+                         title="${isDraggable ? '按住此处拖拽排序' : ''}"
+                         ${isDraggable ? `draggable="true" ondragstart="handleDragStart(event, ${task.id})" ondragend="handleDragEnd(event)"` : ''}>
+                        #${String(visualId).padStart(2, '0')}
+                    </div>
+
+                    <input type="checkbox" class="cyber-checkbox" ${task.is_completed ? 'checked' : ''}
+                           onclick="event.stopPropagation(); toggleComplete(${task.id}, this.checked)">
+
+                    <div class="task-name-container">
+                        <input type="text" class="inline-input p${task.priority}-text ${strikeClass}" value="${task.name}"
+                               onclick="event.stopPropagation();"
+                               onfocus="this.dataset.old = this.value;"
+                               onblur="if(this.value !== this.dataset.old) { this.dataset.old = this.value; updateTask(${task.id}, 'name', this.value, true); }"
+                               onkeydown="if(event.key==='Enter') this.blur(); else if(event.key==='Tab') { event.preventDefault(); this.closest('.task-row').querySelector('.date-input').focus(); }">
+                    </div>
+
+                    <div class="priority-btn p${task.priority}-text ${strikeClass}" onclick="event.stopPropagation(); cyclePriority(${task.id}, ${task.priority})">
+                        P${task.priority}
+                    </div>
+
+                    <input type="text" class="inline-input date-input p${task.priority}-text ${strikeClass}"
+       value="${formatDateDisplay(task.date)}"
+       onclick="event.stopPropagation();"
+       onfocus="this.value=''; this.placeholder=getHintDate('${task.date}');"
+       onblur="if(!this.dataset.submitting) { this.value='${formatDateDisplay(task.date)}'; this.placeholder=''; }"
+       onkeydown="if(event.key==='Enter') { this.dataset.submitting='1'; this.placeholder=''; handleDateBlur(${task.id}, this, '${task.date}', ${m}); this.blur(); }">
+
+                    <button class="action-btn" onclick="event.stopPropagation(); promptDelete(${task.id})">×</button>
+                `;
+                mBody.appendChild(row);
+            });
+        }
+    }
+
+    // 农历与节假日解析引擎（免三方库原生计算）
+    function getLunarDateStr(year, month, day) {
+        try {
+            const d = new Date(year, month - 1, day);
+            const formatter = new Intl.DateTimeFormat('zh-CN-u-ca-chinese', {month: 'long', day: 'numeric'});
+            let parts = formatter.formatToParts(d);
+            let lunarMonth = parts.find(p => p.type === 'month')?.value || '';
+            let lunarDay = parts.find(p => p.type === 'day')?.value || '';
+            let lunarStr = lunarMonth + lunarDay;
+
+            // 简单中国传统节假日映射
+            const holidays = {
+                "正月初一": "春节", "正月十五": "元宵节",
+                "五月初五": "端午节", "七月初七": "七夕节",
+                "八月十五": "中秋节", "九月初九": "重阳节",
+                "腊月初八": "腊八节", "腊月三十": "除夕"
+            };
+            // 阳历节假日
+            const solarHolidays = {
+                "1-1": "元旦", "4-4": "清明节", "4-5": "清明节",
+                "5-1": "劳动节", "10-1": "国庆节"
+            };
+
+            let holiday = holidays[lunarStr] || solarHolidays[`${month}-${day}`];
+            return holiday ? `${lunarStr}(${holiday})` : lunarStr;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function renderCalendarView() {
+        const cal = document.getElementById('calendar-view');
+        cal.innerHTML = '';
+
+        // 渲染日历表头，固定星期一至星期日
+        const weekdaysHeaders = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+        weekdaysHeaders.forEach(day => {
+            const header = document.createElement('div');
+            header.style.textAlign = 'center';
+            header.style.color = 'var(--text-muted)';
+            header.style.fontWeight = 'bold';
+            header.style.fontSize = '14px';
+            header.style.paddingBottom = '10px';
+            header.textContent = day;
+            cal.appendChild(header);
+        });
+
+        const firstDayObj = new Date(currentYear, currentMonth - 1, 1);
+        let firstDay = firstDayObj.getDay();
+        const emptyDays = firstDay === 0 ? 6 : firstDay - 1;
+
+        for (let e = 0; e < emptyDays; e++) {
+            const emptyCell = document.createElement('div');
+            cal.appendChild(emptyCell);
+        }
+
+        const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+        const weekdaysFull = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+
+        for (let i = 1; i <= daysInMonth; i++) {
+            const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+            const dayTasks = tasksData.filter(t => t.date === dateStr);
+
+            const cell = document.createElement('div');
+            cell.className = 'calendar-day';
+
+            const dateObj = new Date(currentYear, currentMonth - 1, i);
+
+            // 直接从刚存好的 window.calendarData 里读取
+            const dateStrFull = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+            let lunarText = window.calendarData ? (window.calendarData[dateStrFull] || "") : "";
+
+            // 完美输出：左边阳历日期，右边 纯农历+节假日括号 (不再显示星期)
+            cell.innerHTML = `
+                <div class="calendar-date" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size: 14px;">${currentYear}-${currentMonth}-${i}</span>
+                    <span style="color:var(--text-muted); font-size:11px; font-weight:normal;">${lunarText}</span>
+                </div>
+            `;
+
+            dayTasks.forEach(t => {
+                const item = document.createElement('div');
+                item.className = `calendar-task-item ${t.is_completed ? 'strike' : `p${t.priority}-text`}`;
+                item.textContent = t.name;
+                cell.appendChild(item);
+            });
+            cal.appendChild(cell);
+        }
+
+        const tbdDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-99`;
+        const tbdTasks = tasksData.filter(t => t.date === tbdDateStr);
+        if (tbdTasks.length > 0) {
+            const cell = document.createElement('div');
+            cell.className = 'calendar-day';
+            cell.style.borderColor = 'var(--text-muted)';
+            cell.innerHTML = `<div class="calendar-date" style="color:var(--text-muted); display:flex; justify-content:space-between;"><span>本月待定</span></div>`;
+            tbdTasks.forEach(t => {
+                const item = document.createElement('div');
+                item.className = `calendar-task-item ${t.is_completed ? 'strike' : `p${t.priority}-text`}`;
+                item.textContent = t.name;
+                cell.appendChild(item);
+            });
+            cal.appendChild(cell);
+        }
+    }
+
+    function handleDateBlur(id, inputElem, originalDate, targetMonth) {
+        let val = inputElem.value.trim();
+        if (!val) val = `${currentYear}-${String(targetMonth).padStart(2, '0')}-99`;
+        updateTask(id, 'date', val);
+    }
+
+    function toggleView() {
+        isCalendarView = !isCalendarView;
+        document.getElementById('list-view').style.display = isCalendarView ? 'none' : 'grid';
+        document.getElementById('calendar-view').style.display = isCalendarView ? 'grid' : 'none';
+
+        // --- 核心修改：同时切换提示文字和显示的图标 ---
+        const btn = document.getElementById('view-switch-btn');
+        btn.title = isCalendarView ? '切换为主看板' : '切换月份日历';
+        btn.querySelector('img').src = isCalendarView ? '/static/img/icon_list.svg' : '/static/img/icon_calendar.svg';
+
+        renderTags();
+        renderBoard();
+    }
+
+    async function addNewRow() {
+        const realMonth = new Date().getMonth() + 1;
+        let targetMonth = realMonth;
+
+        // 智能分配：只有当真实的月份不在当前显示的季度中时，才退化加到当前季度的首月
+        if (!isCalendarView) {
+            const startMonth = currentQuarter * 3 - 2;
+            if (realMonth < startMonth || realMonth > startMonth + 2) {
+                targetMonth = startMonth;
+            }
+        } else {
+            targetMonth = currentMonth;
+        }
+
+        const dateStr = `${currentYear}-${String(targetMonth).padStart(2, '0')}-99`;
+        const response = await fetch('/api/tasks', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: "", date: dateStr, priority: 4})
+        });
+
+        // --- 核心修改：获取新建任务的 ID，并等待页面渲染完成后自动聚焦 ---
+        const data = await response.json();
+        await loadTasks(); // 加上 await，等待列表重新渲染完成
+
+        setTimeout(() => {
+            // 通过 ID 找到刚刚新建的那个任务的输入框，并触发 focus
+            const newRowInput = document.querySelector(`.task-row[data-id='${data.id}'] .task-name-container input`);
+            if (newRowInput) {
+                newRowInput.focus();
+                // --- 新增：聚焦后，让页面平滑滚动，把新任务居中显示在视野内 ---
+                newRowInput.scrollIntoView({behavior: 'smooth', block: 'center'});
+            }
+        }, 50);
+    }
+
+    // Ctrl + Alt + N 快捷键
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'n') {
+            e.preventDefault();
+            addNewRow();
+        }
+    });
+
+    async function updateTask(id, field, value, skipReload = false) {
+        let payload = {};
+        payload[field] = value;
+        await fetch(`/api/tasks/${id}`, {
+            method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+        });
+
+        // 先同步本地数据，防止延迟期间拖拽或操作读取到旧数据
+        const task = tasksData.find(t => t.id === id);
+        if (task) task[field] = value;
+
+        if (skipReload) {
+            // 保持原样：静默更新（比如失去焦点保存名字），不刷新
+            return;
+        }
+
+        if (field === 'date') {
+            // 核心需求：改日期 -> 触发延迟重排
+            scheduleDelayedSort();
+        } else {
+            // 其它保持原样：比如改优先级 (field === 'priority') -> 保持之前的立刻刷新重排
+            loadTasks();
+        }
+    }
+
+    function promptDelete(id) {
+        deleteTargetId = id;
+        document.getElementById('delete-modal').classList.add('show');
+    }
+
+    function closeDeleteModal() {
+        document.getElementById('delete-modal').classList.remove('show');
+        deleteTargetId = null;
+    }
+
+    async function executeDelete() {
+        if (deleteTargetId) {
+            await fetch(`/api/tasks/${deleteTargetId}`, {method: 'DELETE'});
+            closeDeleteModal();
+            loadTasks();
+        }
+    }
+
+    async function uploadExcel() {
+        const fileInput = document.getElementById('excelUpload');
+        if (fileInput.files.length === 0) return;
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        await fetch('/api/tasks/import', {method: 'POST', body: formData});
+        fileInput.value = '';
+        location.reload();
+    }
+
+    initMeta();
+
+    async function exportExcel() {
+        // 1. 先去后端获取生成的 Excel 文件流
+        const response = await fetch('/api/tasks/export');
+        const blob = await response.blob();
+
+        // 2. 在前端生成精确到分钟的时间戳文件名
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        const h = String(now.getHours()).padStart(2, '0');
+        const min = String(now.getMinutes()).padStart(2, '0');
+        const filename = `Todo_List_${y}${m}${d}${h}${min}.xlsx`;
+
+        // 3. 核心：通过前端强行指定下载的文件名
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename; // 强制给文件重命名
+
+        // 触发下载
+        document.body.appendChild(a);
+        a.click();
+
+        // 打扫战场，释放内存
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    // --- 拖拽逻辑函数 ---
+    function handleDragStart(e, id) {
+        draggedTaskId = id;
+
+        // e.target 现在就是那个小编号 div，我们顺藤摸瓜找到整行
+        const row = e.target.closest('.task-row');
+        if (row) {
+            row.style.opacity = '0.4';
+            // 核心黑科技：虽然你只拖拽了编号，但我们强制把跟着鼠标飘的“残影”设置为整行
+            e.dataTransfer.setDragImage(row, 20, 20);
+        }
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function handleDragEnd(e) {
+        const row = e.target.closest('.task-row');
+        if (row) {
+            row.style.opacity = '1';
+        }
+        document.querySelectorAll('.task-row').forEach(r => r.classList.remove('drag-over-top', 'drag-over-bottom'));
+        draggedTaskId = null;
+    }
+
+    function handleDragOver(e, id) {
+        e.preventDefault();
+        if (id === draggedTaskId) return;
+
+        const row = e.currentTarget;
+        const bounding = row.getBoundingClientRect();
+        const offset = e.clientY - bounding.top;
+        if (offset > bounding.height / 2) {
+            row.classList.remove('drag-over-top');
+            row.classList.add('drag-over-bottom');
+        } else {
+            row.classList.remove('drag-over-bottom');
+            row.classList.add('drag-over-top');
+        }
+    }
+
+    function handleDragLeave(e) {
+        e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
+    }
+
+    async function handleDrop(e, targetId) {
+        e.preventDefault();
+        e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
+        if (!draggedTaskId || draggedTaskId === targetId) return;
+
+        const row = e.currentTarget;
+        const bounding = row.getBoundingClientRect();
+        const offset = e.clientY - bounding.top;
+        const insertAfter = offset > bounding.height / 2;
+
+        const draggedTask = tasksData.find(t => t.id === draggedTaskId);
+        const targetTask = tasksData.find(t => t.id === targetId);
+
+        const targetMonth = parseInt(targetTask.date.substring(5, 7));
+        let monthUndated = tasksData.filter(t => !t.is_completed && t.date.endsWith('-99') && parseInt(t.date.substring(5, 7)) === targetMonth);
+
+        const fromIdx = monthUndated.findIndex(t => t.id === draggedTaskId);
+        const toIdx = monthUndated.findIndex(t => t.id === targetId);
+
+        if (fromIdx !== -1 && toIdx !== -1) {
+            monthUndated.splice(fromIdx, 1);
+            const newToIdx = monthUndated.findIndex(t => t.id === targetId);
+            monthUndated.splice(insertAfter ? newToIdx + 1 : newToIdx, 0, draggedTask);
+
+            const orderedIds = monthUndated.map(t => t.id);
+            await fetch('/api/tasks/reorder', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ids: orderedIds})
+            });
+            loadTasks();
+        }
+    }
+
+    // ================= 远期目标逻辑 =================
+    async function loadGoals() {
+        const res = await fetch('/api/goals');
+        goalsData = await res.json();
+
+        if (goalsData.length === 0) {
+            currentGoalIndex = -1;
+        } else {
+            // 👇 核心修改 1：从后端返回的数据里，寻找哪一个是主要矛盾 (is_principal_contradiction === 1)
+            const principalIndex = goalsData.findIndex(g => g.is_principal_contradiction === 1);
+
+            if (principalIndex !== -1) {
+                // 如果找到了，刷新页面后精准停留在此项
+                currentGoalIndex = principalIndex;
+            } else {
+                // 容错处理：如果全是老数据没有标志位，默认选第0个并上报后端
+                currentGoalIndex = 0;
+                await fetch(`/api/goals/${goalsData[0].id}/set_principal`, { method: 'POST' });
+            }
+        }
+
+        renderCurrentGoal();
+    }
+
+    function renderCurrentGoal() {
+        const input = document.getElementById('lt-goal-input');
+        const btnDel = document.getElementById('lt-btn-del');
+        const btnDone = document.getElementById('lt-btn-done');
+        const btnNext = document.getElementById('lt-btn-next');
+
+        if (goalsData.length === 0) {
+            input.value = "暂无远期目标";
+            input.setAttribute('readonly', true);
+            input.style.pointerEvents = 'none';
+            input.classList.remove('is-completed');
+            btnDel.style.display = 'none';
+            btnDone.style.display = 'none';
+            btnNext.style.display = 'none';
+        } else {
+            const goal = goalsData[currentGoalIndex];
+            input.value = goal.name;
+            input.style.pointerEvents = 'auto';
+
+            if (goal.is_completed) {
+                input.classList.add('is-completed');
+                btnDone.style.display = 'none';
+            } else {
+                input.classList.remove('is-completed');
+                btnDone.style.display = 'inline-flex';
+            }
+            btnDel.style.display = 'inline-flex';
+
+            // 👇 核心修改：不管有几个目标，强制永远显示 Next (切换) 图标！
+            btnNext.style.display = 'inline-flex';
+        }
+    }
+
+    async function addGoal() {
+        const res = await fetch('/api/goals', {method: 'POST'});
+        const data = await res.json();
+        await loadGoals();
+
+        // 定位到最新创建的目标
+        currentGoalIndex = goalsData.findIndex(g => g.id === data.id);
+        if (currentGoalIndex === -1) currentGoalIndex = 0;
+        renderCurrentGoal();
+
+        // 自动聚焦
+        setTimeout(() => {
+            const input = document.getElementById('lt-goal-input');
+            input.removeAttribute('readonly');
+            input.focus();
+            input.select();
+        }, 50);
+    }
+
+    // === 远期目标：删除确认弹窗逻辑 ===
+    function promptDeleteGoal() {
+        if (currentGoalIndex >= 0 && goalsData.length > 0) {
+            // 呼出复用的科技感弹窗
+            document.getElementById('delete-goal-modal').classList.add('show');
+        }
+    }
+
+    function closeDeleteGoalModal() {
+        // 关闭弹窗
+        document.getElementById('delete-goal-modal').classList.remove('show');
+    }
+
+    async function executeDeleteGoal() {
+        if (currentGoalIndex >= 0 && goalsData.length > 0) {
+            const goalId = goalsData[currentGoalIndex].id;
+            await fetch(`/api/goals/${goalId}`, { method: 'DELETE' });
+            closeDeleteGoalModal(); // 销毁后关闭弹窗
+            await loadGoals();      // 刷新列表
+        }
+    }
+
+    async function completeGoal() {
+        if (currentGoalIndex >= 0 && goalsData.length > 0) {
+            const goalId = goalsData[currentGoalIndex].id;
+            await fetch(`/api/goals/${goalId}`, {
+                method: 'PUT', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({is_completed: 1})
+            });
+            await loadGoals();
+        }
+    }
+
+    async function updateGoalName(newName) {
+        if (currentGoalIndex >= 0 && goalsData.length > 0) {
+            const goalId = goalsData[currentGoalIndex].id; // 记住当前刚编辑完的目标 ID
+            const goal = goalsData[currentGoalIndex];
+
+            if (goal.name !== newName.trim() && newName.trim() !== '') {
+                await fetch(`/api/goals/${goal.id}`, {
+                    method: 'PUT', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: newName.trim()})
+                });
+
+                await loadGoals(); // 注意：这里 loadGoals 默认会强行切回主要矛盾
+
+                // 👇 所以我们要强行把游标拉回到刚刚修改的这个目标上，不让它立刻跳走
+                currentGoalIndex = goalsData.findIndex(g => g.id === goalId);
+                if (currentGoalIndex !== -1) renderCurrentGoal();
+
+            } else if (newName.trim() === '') {
+                renderCurrentGoal();
+            }
+
+            // 👇 核心新增：无论是改了名字还是没改，只要完成编辑动作，就触发 5 秒回退倒计时
+            checkAndRevertToPrincipal();
+        }
+    }
+
+    async function cycleGoal() {
+        if (goalsData.length > 1) {
+            // 1. 计算出下一个目标的索引
+            currentGoalIndex = (currentGoalIndex + 1) % goalsData.length;
+            const targetGoal = goalsData[currentGoalIndex];
+
+            // 👇 核心修改 3：切换时立刻通知后端将此目标在数据库中置为主要矛盾
+            await fetch(`/api/goals/${targetGoal.id}/set_principal`, { method: 'POST' });
+
+            // 2. 重新加载远期目标列表，确保前后端完全同步并重绘 UI
+            loadGoals();
+        }
+    }
+
+
+</script>
+</body>
+</html>
