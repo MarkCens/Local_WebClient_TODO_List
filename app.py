@@ -232,22 +232,17 @@ def update_task(task_id):
         data = request.json
         updates = []
         params = []
+
+        # 👇 核心优化：后端完全信任前端传来的标准化数据，不做任何二次解析
         for key in ['name', 'date', 'priority', 'is_completed']:
             if key in data:
-                val = data[key]
-                if key == 'date':
-                    val = str(val).replace('/', '-')
-                    if not val.endswith('-99'):
-                        parts = val.split('-')
-                        if len(parts) == 2:
-                            val = f"{datetime.now().year}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
-                        elif len(parts) == 3:
-                            val = f"{parts[0]}-{parts[1].zfill(2)}-{parts[2].zfill(2)}"
                 updates.append(f"{key} = ?")
-                params.append(val)
+                params.append(data[key])
+
         if updates:
             params.append(task_id)
             conn.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", params)
+
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})

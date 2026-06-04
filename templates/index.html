@@ -703,6 +703,7 @@
     let currentGoalIndex = 0;
     let revertGoalTimer = null; // 全局定时器
     let delayedSortTimer = null; // 用于延迟排序的全局定时器
+    let delayedSortTime = 5000; // 延迟重排时间(5秒)
 
     // 👇 判断是否为 Mac 并在页面加载时更新提示文字
     const isMac = /macintosh|mac os x/i.test(navigator.userAgent);
@@ -733,7 +734,7 @@
         clearTimeout(delayedSortTimer);
         delayedSortTimer = setTimeout(() => {
             loadTasks();
-        }, 3000);
+        }, delayedSortTime);
     }
 
     function checkAndRevertToPrincipal() {
@@ -1057,11 +1058,11 @@
                     </div>
 
                     <input type="text" class="inline-input date-input p${task.priority}-text ${strikeClass}"
-       value="${formatDateDisplay(task.date)}"
-       onclick="event.stopPropagation();"
-       onfocus="this.value=''; this.placeholder=getHintDate('${task.date}');"
-       onblur="if(!this.dataset.submitting) { this.value='${formatDateDisplay(task.date)}'; this.placeholder=''; }"
-       onkeydown="if(event.key==='Enter') { this.dataset.submitting='1'; this.placeholder=''; handleDateBlur(${task.id}, this, '${task.date}', ${m}); this.blur(); }">
+                       value="${formatDateDisplay(task.date)}"
+                       onclick="event.stopPropagation();"
+                       onfocus="this.value=''; this.placeholder=getHintDate('${task.date}');"
+                       onblur="handleDateBlur(${task.id}, this, '${task.date}')"
+                       onkeydown="if(event.key==='Enter') this.blur();">
 
                     <button class="action-btn" onclick="event.stopPropagation(); promptDelete(${task.id})">×</button>
                 `;
@@ -1176,11 +1177,53 @@
         }
     }
 
-    function handleDateBlur(id, inputElem, originalDate, targetMonth) {
-        let val = inputElem.value.trim();
-        if (!val) val = `${currentYear}-${String(targetMonth).padStart(2, '0')}-99`;
-        updateTask(id, 'date', val);
+    function handleDateBlur(id, inputElem, originalDate) {
+    let val = inputElem.value.trim();
+    inputElem.placeholder = ''; // 清理占位符
+
+    // 1. 如果什么都没填（空），直接恢复成以前的日期，不发请求
+    if (!val) {
+        inputElem.value = formatDateDisplay(originalDate);
+        return;
     }
+
+    // 2. 基础格式校验 (必须是 1~2位数字 /或- 1~2位数字)
+    const match = val.match(/^(\d{1,2})[\/-](\d{1,2})$/);
+    if (!match) {
+        inputElem.value = formatDateDisplay(originalDate);
+        return;
+    }
+
+    const m = parseInt(match[1], 10);
+    const d = parseInt(match[2], 10);
+
+    // 3. 逻辑校验：月份必须是 1-12
+    if (m < 1 || m > 12) {
+        inputElem.value = formatDateDisplay(originalDate);
+        return;
+    }
+
+    // 4. 逻辑校验：日期必须是合法的（比如不能超过当前月的最大天数，拒绝 6/80 这种）
+    // new Date(年份, 月份, 0).getDate() 会自动返回该月最后一天的日期
+    const daysInMonth = new Date(currentYear, m, 0).getDate();
+    if (d < 1 || d > daysInMonth) {
+        inputElem.value = formatDateDisplay(originalDate);
+        return;
+    }
+
+    // 5. 校验全部通过，拼接标准的 YYYY-MM-DD
+    const finalDateStr = `${currentYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+    // 如果校验后发现和原来的日期其实没变，恢复显示即可，无需浪费网络请求
+    if (finalDateStr === originalDate) {
+        inputElem.value = formatDateDisplay(originalDate);
+        return;
+    }
+
+    // 6. 确定要更新：修改前端显示，并发送给后端
+    inputElem.value = formatDateDisplay(finalDateStr);
+    updateTask(id, 'date', finalDateStr);
+}
 
     function toggleView() {
         isCalendarView = !isCalendarView;
@@ -1326,20 +1369,20 @@
 
     // --- 拖拽逻辑函数 ---
     function handleDragStart(e, id) {
-    draggedTaskId = id;
+        draggedTaskId = id;
 
-    // 👇 核心修复：立即清空屏幕上所有不小心中伤、框选的文本蓝块，回归纯净拖拽
-    window.getSelection().removeAllRanges();
+        // 👇 核心修复：立即清空屏幕上所有不小心中伤、框选的文本蓝块，回归纯净拖拽
+        window.getSelection().removeAllRanges();
 
-    // e.target 现在就是那个小编号 div，我们顺藤摸瓜找到整行
-    const row = e.target.closest('.task-row');
-    if (row) {
-        row.style.opacity = '0.4';
-        // 核心黑科技：虽然你只拖拽了编号，但我们强制把跟着鼠标飘的“残影”设置为整行
-        e.dataTransfer.setDragImage(row, 20, 20);
+        // e.target 现在就是那个小编号 div，我们顺藤摸瓜找到整行
+        const row = e.target.closest('.task-row');
+        if (row) {
+            row.style.opacity = '0.4';
+            // 核心黑科技：虽然你只拖拽了编号，但我们强制把跟着鼠标飘的“残影”设置为整行
+            e.dataTransfer.setDragImage(row, 20, 20);
+        }
+        e.dataTransfer.effectAllowed = 'move';
     }
-    e.dataTransfer.effectAllowed = 'move';
-}
 
     function handleDragEnd(e) {
         const row = e.target.closest('.task-row');
@@ -1351,27 +1394,27 @@
     }
 
     function handleDragOver(e, id) {
-    e.preventDefault();
-    if (id === draggedTaskId) return;
+        e.preventDefault();
+        if (id === draggedTaskId) return;
 
-    // 👇 核心修复：精准排他！在亮起当前行之前，强制拔掉其他所有行的发光状态，防止多行同时亮起
-    document.querySelectorAll('.task-row').forEach(r => {
-        if (r !== e.currentTarget) {
-            r.classList.remove('drag-over-top', 'drag-over-bottom');
+        // 👇 核心修复：精准排他！在亮起当前行之前，强制拔掉其他所有行的发光状态，防止多行同时亮起
+        document.querySelectorAll('.task-row').forEach(r => {
+            if (r !== e.currentTarget) {
+                r.classList.remove('drag-over-top', 'drag-over-bottom');
+            }
+        });
+
+        const row = e.currentTarget;
+        const bounding = row.getBoundingClientRect();
+        const offset = e.clientY - bounding.top;
+        if (offset > bounding.height / 2) {
+            row.classList.remove('drag-over-top');
+            row.classList.add('drag-over-bottom');
+        } else {
+            row.classList.remove('drag-over-bottom');
+            row.classList.add('drag-over-top');
         }
-    });
-
-    const row = e.currentTarget;
-    const bounding = row.getBoundingClientRect();
-    const offset = e.clientY - bounding.top;
-    if (offset > bounding.height / 2) {
-        row.classList.remove('drag-over-top');
-        row.classList.add('drag-over-bottom');
-    } else {
-        row.classList.remove('drag-over-bottom');
-        row.classList.add('drag-over-top');
     }
-}
 
     function handleDragLeave(e) {
         e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
