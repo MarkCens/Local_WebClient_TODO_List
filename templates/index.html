@@ -608,7 +608,8 @@
                         style="display:none;">
                     <img src="/static/img/icon_next.svg" alt="Next">
                 </button>
-                <button class="icon-btn tiny-btn" onclick="promptDeleteGoal()" title="删除目标" id="lt-btn-del" style="display:none;">
+                <button class="icon-btn tiny-btn" onclick="promptDeleteGoal()" title="删除目标" id="lt-btn-del"
+                        style="display:none;">
                     <img src="/static/img/icon_delete.svg" alt="Delete">
                 </button>
             </div>
@@ -665,7 +666,8 @@
 
 <div class="tech-modal-overlay" id="delete-modal">
     <div class="tech-modal">
-        <p style="color: var(--neon-cyan); font-family: Consolas; font-size: 16px; margin-bottom: 20px;">CONFIRMING DIALOG</p>
+        <p style="color: var(--neon-cyan); font-family: Consolas; font-size: 16px; margin-bottom: 20px;">CONFIRMING
+            DIALOG</p>
         <p style="font-size: 14px; color: var(--text-main);">确认删除吗？</p>
         <div class="modal-btns">
             <button onclick="closeDeleteModal()">取消</button>
@@ -676,7 +678,8 @@
 
 <div class="tech-modal-overlay" id="delete-goal-modal">
     <div class="tech-modal">
-        <p style="color: var(--neon-cyan); font-family: Consolas; font-size: 16px; margin-bottom: 20px;">CONFIRMING DIALOG</p>
+        <p style="color: var(--neon-cyan); font-family: Consolas; font-size: 16px; margin-bottom: 20px;">CONFIRMING
+            DIALOG</p>
         <p style="font-size: 14px; color: var(--text-main);">确认删除吗？</p>
         <div class="modal-btns">
             <button onclick="closeDeleteGoalModal()">取消</button>
@@ -762,6 +765,14 @@
         loadTasks();
         loadGoals();
     }
+
+    // 防止用户因框选了文字，而错误触发浏览器的原生多选文本拖拽
+    document.addEventListener('dragstart', (e) => {
+        // 如果拖拽的源头不是我们专属的拖拽手柄，直接一律按死，不准拖
+        if (!e.target.closest('.drag-handle')) {
+            e.preventDefault();
+        }
+    });
 
     function updateYearUI() {
         document.getElementById('display-year').textContent = currentYear;
@@ -1315,17 +1326,20 @@
 
     // --- 拖拽逻辑函数 ---
     function handleDragStart(e, id) {
-        draggedTaskId = id;
+    draggedTaskId = id;
 
-        // e.target 现在就是那个小编号 div，我们顺藤摸瓜找到整行
-        const row = e.target.closest('.task-row');
-        if (row) {
-            row.style.opacity = '0.4';
-            // 核心黑科技：虽然你只拖拽了编号，但我们强制把跟着鼠标飘的“残影”设置为整行
-            e.dataTransfer.setDragImage(row, 20, 20);
-        }
-        e.dataTransfer.effectAllowed = 'move';
+    // 👇 核心修复：立即清空屏幕上所有不小心中伤、框选的文本蓝块，回归纯净拖拽
+    window.getSelection().removeAllRanges();
+
+    // e.target 现在就是那个小编号 div，我们顺藤摸瓜找到整行
+    const row = e.target.closest('.task-row');
+    if (row) {
+        row.style.opacity = '0.4';
+        // 核心黑科技：虽然你只拖拽了编号，但我们强制把跟着鼠标飘的“残影”设置为整行
+        e.dataTransfer.setDragImage(row, 20, 20);
     }
+    e.dataTransfer.effectAllowed = 'move';
+}
 
     function handleDragEnd(e) {
         const row = e.target.closest('.task-row');
@@ -1337,20 +1351,27 @@
     }
 
     function handleDragOver(e, id) {
-        e.preventDefault();
-        if (id === draggedTaskId) return;
+    e.preventDefault();
+    if (id === draggedTaskId) return;
 
-        const row = e.currentTarget;
-        const bounding = row.getBoundingClientRect();
-        const offset = e.clientY - bounding.top;
-        if (offset > bounding.height / 2) {
-            row.classList.remove('drag-over-top');
-            row.classList.add('drag-over-bottom');
-        } else {
-            row.classList.remove('drag-over-bottom');
-            row.classList.add('drag-over-top');
+    // 👇 核心修复：精准排他！在亮起当前行之前，强制拔掉其他所有行的发光状态，防止多行同时亮起
+    document.querySelectorAll('.task-row').forEach(r => {
+        if (r !== e.currentTarget) {
+            r.classList.remove('drag-over-top', 'drag-over-bottom');
         }
+    });
+
+    const row = e.currentTarget;
+    const bounding = row.getBoundingClientRect();
+    const offset = e.clientY - bounding.top;
+    if (offset > bounding.height / 2) {
+        row.classList.remove('drag-over-top');
+        row.classList.add('drag-over-bottom');
+    } else {
+        row.classList.remove('drag-over-bottom');
+        row.classList.add('drag-over-top');
     }
+}
 
     function handleDragLeave(e) {
         e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
@@ -1407,7 +1428,7 @@
             } else {
                 // 容错处理：如果全是老数据没有标志位，默认选第0个并上报后端
                 currentGoalIndex = 0;
-                await fetch(`/api/goals/${goalsData[0].id}/set_principal`, { method: 'POST' });
+                await fetch(`/api/goals/${goalsData[0].id}/set_principal`, {method: 'POST'});
             }
         }
 
@@ -1482,7 +1503,7 @@
     async function executeDeleteGoal() {
         if (currentGoalIndex >= 0 && goalsData.length > 0) {
             const goalId = goalsData[currentGoalIndex].id;
-            await fetch(`/api/goals/${goalId}`, { method: 'DELETE' });
+            await fetch(`/api/goals/${goalId}`, {method: 'DELETE'});
             closeDeleteGoalModal(); // 销毁后关闭弹窗
             await loadGoals();      // 刷新列表
         }
@@ -1532,7 +1553,7 @@
             const targetGoal = goalsData[currentGoalIndex];
 
             // 👇 核心修改 3：切换时立刻通知后端将此目标在数据库中置为主要矛盾
-            await fetch(`/api/goals/${targetGoal.id}/set_principal`, { method: 'POST' });
+            await fetch(`/api/goals/${targetGoal.id}/set_principal`, {method: 'POST'});
 
             // 2. 重新加载远期目标列表，确保前后端完全同步并重绘 UI
             loadGoals();
