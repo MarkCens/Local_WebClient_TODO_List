@@ -1,4 +1,4 @@
-# 🌌 Cyberpunk Tech TODO List (赛博朋克暗黑科技风待办事项系统)
+# 🌌 Cyberpunk Tech TODO List
 
 这是一个基于 **Flask + SQLite3** 后端以及 **原生 HTML5/CSS3/JavaScript** 前端构建的、具有强烈暗黑科技/赛博朋克视觉风格的个人高效待办事项（TODO List）管理系统。系统针对现代打工人、程序员的设计语言进行了深度视觉定制，支持多维度的任务看板与日历视图切换。
 
