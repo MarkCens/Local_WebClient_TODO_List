@@ -703,9 +703,19 @@
     let currentGoalIndex = 0;
     let revertGoalTimer = null; // 全局定时器
     let delayedSortTimer = null; // 用于延迟排序的全局定时器
-    let delayedSortTime = 5000; // 延迟重排时间(5秒)
+    let delayedSortTime = 600000; // 延迟重排时间(1秒)
 
-    // 👇 判断是否为 Mac 并在页面加载时更新提示文字
+    // 监听页面可见性（最小化/切换标签页）
+    document.addEventListener("visibilitychange", () => {
+        // 如果页面不可见，且当前正有排队的重排任务，立刻掐断倒计时并直接执行
+        if (document.hidden && delayedSortTimer !== null) {
+            clearTimeout(delayedSortTimer);
+            delayedSortTimer = null;
+            loadTasks();
+        }
+    });
+
+    // 判断是否为 Mac 并在页面加载时更新提示文字
     const isMac = /macintosh|mac os x/i.test(navigator.userAgent);
     window.addEventListener('DOMContentLoaded', () => {
         const hintEl = document.getElementById('shortcut-hint');
@@ -732,9 +742,16 @@
     // 改日期、勾选完成(延迟重排)
     function scheduleDelayedSort() {
         clearTimeout(delayedSortTimer);
-        delayedSortTimer = setTimeout(() => {
+        if (document.hidden) {
+            // 如果此时浏览器已经在后台，直接重排
             loadTasks();
-        }, delayedSortTime);
+        } else {
+            // 否则开启 5 分钟倒计时
+            delayedSortTimer = setTimeout(() => {
+                delayedSortTimer = null;
+                loadTasks();
+            }, delayedSortTime);
+        }
     }
 
     function checkAndRevertToPrincipal() {
@@ -976,6 +993,10 @@
 
     // 处理勾选：不再隐藏复选框，直接赋 strike 划线样式
     async function toggleComplete(id, isCompleted) {
+        // 先获取本地任务数据，方便后续判断
+        const task = tasksData.find(t => t.id === id);
+        if (!task) return;
+
         const row = document.querySelector(`.task-row[data-id='${id}']`);
         if (row) {
             const targets = row.querySelectorAll('.inline-input, .priority-btn');
@@ -983,27 +1004,38 @@
             else targets.forEach(el => el.classList.remove('strike'));
         }
 
-        // 构造请求数据，如果勾选完成，顺带把 priority 设为 4
+        // 构造请求数据
         const payload = {is_completed: isCompleted ? 1 : 0};
+
         if (isCompleted) {
-            payload.priority = 4;
+            payload.priority = 4; // 打钩完成时，优先级自动降为 4
+
+            // 👇 核心新增逻辑：如果是完成状态，且没有具体日期（即以 -99 结尾的待定状态）
+            if (task.date && task.date.endsWith('-99')) {
+                const today = new Date();
+                const y = today.getFullYear();
+                const m = String(today.getMonth() + 1).padStart(2, '0');
+                const d = String(today.getDate()).padStart(2, '0');
+                const todayStr = `${y}-${m}-${d}`;
+
+                payload.date = todayStr; // 将今天日期加到发送给后端的包里
+                task.date = todayStr;    // 同步更新本地状态
+            }
         }
 
+        // 发送更新请求
         await fetch(`/api/tasks/${id}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
         });
 
-        const task = tasksData.find(t => t.id === id);
-        if (task) {
-            task.is_completed = isCompleted ? 1 : 0;
-            // 本地数据同步更新
-            if (isCompleted) task.priority = 4;
-        }
+        // 本地数据同步更新剩余状态
+        task.is_completed = isCompleted ? 1 : 0;
+        if (isCompleted) task.priority = 4;
 
-        // 排序渲染(延时触发)
-        scheduleDelayedSort();
+        // 触发重新排序和渲染
+        loadTasks();
     }
 
     function renderListView() {
@@ -1062,7 +1094,7 @@
                        onclick="event.stopPropagation();"
                        onfocus="this.value=''; this.placeholder=getHintDate('${task.date}');"
                        onblur="handleDateBlur(${task.id}, this, '${task.date}')"
-                       onkeydown="if(event.key==='Enter') this.blur();">
+                       onkeydown="if(event.key==='Enter') { this.dataset.enterPressed = 'true'; this.blur(); }">
 
                     <button class="action-btn" onclick="event.stopPropagation(); promptDelete(${task.id})">×</button>
                 `;
@@ -1177,53 +1209,76 @@
         }
     }
 
-    function handleDateBlur(id, inputElem, originalDate) {
-    let val = inputElem.value.trim();
-    inputElem.placeholder = ''; // 清理占位符
+    function handleDateBlur(id, inputElem, staleHtmlDate) {
+        // 👇 核心修复 1：绝对不信任 HTML 传来的旧日期，直接去本地数据源拿最新状态！
+        // 这样即使在 5 分钟的延迟重排期间内反复操作，也绝不会读到“鬼影”数据。
+        const task = tasksData.find(t => t.id === id);
+        if (!task) return;
+        const originalDate = task.date;
 
-    // 1. 如果什么都没填（空），直接恢复成以前的日期，不发请求
-    if (!val) {
-        inputElem.value = formatDateDisplay(originalDate);
-        return;
+        let val = inputElem.value.trim();
+        inputElem.placeholder = ''; // 清理占位符
+
+        // 获取并消费回车标记
+        const isEnterPressed = inputElem.dataset.enterPressed === 'true';
+        inputElem.dataset.enterPressed = 'false';
+
+        // ================= 场景 1：用户没有输入任何内容 (清空了输入框) =================
+        if (!val) {
+            if (isEnterPressed) {
+                // 【情况A】回车 + 空值：用户的明确指令，覆盖为空（置为当前月份的待定）
+                const parts = originalDate.split('-');
+                let m = currentMonth;
+                if (parts.length >= 2) m = parseInt(parts[1], 10);
+                const tbdDateStr = `${currentYear}-${String(m).padStart(2, '0')}-99`;
+
+                if (originalDate !== tbdDateStr) {
+                    inputElem.value = formatDateDisplay(tbdDateStr);
+                    updateTask(id, 'date', tbdDateStr);
+                } else {
+                    inputElem.value = formatDateDisplay(originalDate);
+                }
+            } else {
+                // 【情况B】失去焦点 + 空值：当作误触，绝对不更新，恢复原样
+                inputElem.value = formatDateDisplay(originalDate);
+            }
+            return; // 结束判定
+        }
+
+        // ================= 场景 2：用户输入了内容 =================
+        // 基础格式校验 (必须是 1~2位数字 /或- 1~2位数字)
+        const match = val.match(/^(\d{1,2})[\/-](\d{1,2})$/);
+
+        if (!match) {
+            // 【情况C】格式非日期（比如乱敲的字母）：不更新该日期，恢复原样
+            inputElem.value = formatDateDisplay(originalDate);
+            return;
+        }
+
+        const m = parseInt(match[1], 10);
+        const d = parseInt(match[2], 10);
+
+        // 逻辑校验：检查月份和天数是否合法 (拒绝 13/45 这种离谱日期)
+        const daysInMonth = new Date(currentYear, m, 0).getDate();
+        if (m < 1 || m > 12 || d < 1 || d > daysInMonth) {
+            // 【情况D】日期不合法：不更新该日期，恢复原样
+            inputElem.value = formatDateDisplay(originalDate);
+            return;
+        }
+
+        // 【情况E】格式正确且合法：准备更新为输入的日期！
+        const finalDateStr = `${currentYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+        if (finalDateStr === originalDate) {
+            // 如果填的日期和本来的一模一样，直接恢复显示，不浪费网络请求
+            inputElem.value = formatDateDisplay(originalDate);
+            return;
+        }
+
+        // 彻底通过校验，不论是回车还是失去焦点，都触发更新！
+        inputElem.value = formatDateDisplay(finalDateStr);
+        updateTask(id, 'date', finalDateStr);
     }
-
-    // 2. 基础格式校验 (必须是 1~2位数字 /或- 1~2位数字)
-    const match = val.match(/^(\d{1,2})[\/-](\d{1,2})$/);
-    if (!match) {
-        inputElem.value = formatDateDisplay(originalDate);
-        return;
-    }
-
-    const m = parseInt(match[1], 10);
-    const d = parseInt(match[2], 10);
-
-    // 3. 逻辑校验：月份必须是 1-12
-    if (m < 1 || m > 12) {
-        inputElem.value = formatDateDisplay(originalDate);
-        return;
-    }
-
-    // 4. 逻辑校验：日期必须是合法的（比如不能超过当前月的最大天数，拒绝 6/80 这种）
-    // new Date(年份, 月份, 0).getDate() 会自动返回该月最后一天的日期
-    const daysInMonth = new Date(currentYear, m, 0).getDate();
-    if (d < 1 || d > daysInMonth) {
-        inputElem.value = formatDateDisplay(originalDate);
-        return;
-    }
-
-    // 5. 校验全部通过，拼接标准的 YYYY-MM-DD
-    const finalDateStr = `${currentYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-
-    // 如果校验后发现和原来的日期其实没变，恢复显示即可，无需浪费网络请求
-    if (finalDateStr === originalDate) {
-        inputElem.value = formatDateDisplay(originalDate);
-        return;
-    }
-
-    // 6. 确定要更新：修改前端显示，并发送给后端
-    inputElem.value = formatDateDisplay(finalDateStr);
-    updateTask(id, 'date', finalDateStr);
-}
 
     function toggleView() {
         isCalendarView = !isCalendarView;
