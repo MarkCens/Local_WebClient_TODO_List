@@ -988,7 +988,30 @@
         else if (currentP === 2) nextP = 1;
         else nextP = 4;
 
-        await updateTask(id, 'priority', nextP);
+        // 1. 纯前端手动修改当前任务的 DOM 样式，实现立刻变色且不闪烁
+        const row = document.querySelector(`.task-row[data-id='${id}']`);
+        if (row) {
+            // 更新优先级按钮本身
+            const pBtn = row.querySelector('.priority-btn');
+            if (pBtn) {
+                pBtn.classList.remove(`p${currentP}-text`);
+                pBtn.classList.add(`p${nextP}-text`);
+                pBtn.textContent = `P${nextP}`;
+                // 核心：更新绑定的点击事件，把下一次点击需要的 currentP 传进去
+                pBtn.setAttribute('onclick', `event.stopPropagation(); cyclePriority(${id}, ${nextP})`);
+            }
+
+            // 更新同行内的任务名称和日期文本的颜色
+            const inputs = row.querySelectorAll('.inline-input');
+            inputs.forEach(input => {
+                input.classList.remove(`p${currentP}-text`);
+                input.classList.add(`p${nextP}-text`);
+            });
+        }
+
+        // 2. 通知后端更新数据库，并传入 skipReload = true
+        // 这样就不会触发 loadTasks()，保护了未完成的延迟重排倒计时
+        await updateTask(id, 'priority', nextP, true);
     }
 
     // 处理勾选：不再隐藏复选框，直接赋 strike 划线样式
