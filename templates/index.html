@@ -30,7 +30,7 @@
             color: var(--text-main);
             font-family: 'Segoe UI', Consolas, sans-serif;
             margin: 0;
-            padding: 20px 40px 80px 40px;
+            padding: 20px 40px 160px 40px;
             overflow-anchor: none;
         }
 
@@ -166,21 +166,41 @@
         }
 
         .drag-handle {
-            min-width: 25px;
+            min-width: 42px;
+            align-self: stretch;
             font-family: Consolas;
             color: var(--neon-cyan);
             font-size: 12px;
             display: flex;
             align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            margin: -4px 0 -4px -6px;
+            touch-action: none;
             user-select: none; /* 防止拖拽时误选中文字 */
+            transition: transform 0.15s ease;
+            transform-origin: center;
         }
 
         .drag-handle.can-drag {
             cursor: grab;
         }
 
+        .drag-handle.can-drag:hover,
         .drag-handle.can-drag:active {
             cursor: grabbing;
+            transform: scale(1.1);
+        }
+
+        .task-row.pointer-dragging {
+            opacity: 0.45;
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 12px rgba(0, 255, 255, 0.18);
+        }
+
+        body.is-reordering {
+            cursor: grabbing;
+            user-select: none;
         }
 
         .task-row.drag-over-top {
@@ -718,6 +738,7 @@
     let tasksData = [];
     let deleteTargetId = null;
     let draggedTaskId = null; // 记录当前拖拽的任务ID
+    let pointerDragState = null;
     let isFirstLoad = true; // 用于判断是否为页面首次加载
     let goalsData = [];
     let currentGoalIndex = 0;
@@ -725,7 +746,6 @@
     let delayedSortTimer = null; // 用于延迟排序的全局定时器
     let delayedSortTime = 600000; // 延迟重排时间(1秒)
     let suppressNextNewTaskAnimation = false;
-    let suppressNextRenderAnimation = false;
 
     // 监听页面可见性（最小化/切换标签页）
     document.addEventListener("visibilitychange", () => {
@@ -906,9 +926,7 @@
     // FLIP动画渲染
     function renderWithAnimation() {
         const skipNewTaskAnimation = suppressNextNewTaskAnimation;
-        const skipRenderAnimation = suppressNextRenderAnimation;
         suppressNextNewTaskAnimation = false;
-        suppressNextRenderAnimation = false;
 
         // 1. First: 记录渲染前所有任务的当前位置
         const oldPositions = {};
@@ -919,8 +937,8 @@
         // 2. 正常执行原有的 DOM 渲染，将所有任务排到新的位置
         renderBoard();
 
-        // 如果是日历视图，或当前操作要求保持视口稳定，不执行位移动画
-        if (isCalendarView || skipRenderAnimation) return;
+        // 如果是日历视图，不执行平滑动画
+        if (isCalendarView) return;
 
         // 3. Last & Invert & Play: 计算位置差并播放丝滑动画
         document.querySelectorAll('.task-row').forEach(row => {
@@ -1139,8 +1157,7 @@
         task.is_completed = isCompleted ? 1 : 0;
         if (isCompleted) task.priority = 4;
 
-        // 重排后做同帧视口补偿，避免看到滚动条跳动
-        suppressNextRenderAnimation = true;
+        // 重排后保持当前任务区域稳定，同时保留移动动画
         await loadTasks();
         restoreViewportAnchor(viewportAnchor);
     }
@@ -1159,61 +1176,41 @@
 
             monthTasks.forEach((task, index) => {
                 const visualId = index + 1;
-                const row = document.createElement('div');
-                row.className = `task-row`;
-                row.dataset.id = task.id;
-
-                const strikeClass = task.is_completed ? 'strike' : '';
-                const safeTaskName = escapeHtml(task.name);
-
-                // 判断当前任务是否符合可拖拽条件：未完成 && 待定日期(-99)
-                const isDraggable = !task.is_completed && task.date.endsWith('-99');
-                if (isDraggable) {
-                    row.classList.add('draggable-enabled');
-                    row.ondragover = (e) => handleDragOver(e, task.id);
-                    row.ondragleave = (e) => handleDragLeave(e);
-                    row.ondrop = (e) => handleDrop(e, task.id);
-                }
-
-                row.innerHTML = `
-                    <div class="${isDraggable ? 'drag-handle can-drag' : 'drag-handle'}"
-                         title="${isDraggable ? '按住此处拖拽排序' : ''}"
-                         ${isDraggable ? `draggable="true" ondragstart="handleDragStart(event, ${task.id})" ondragend="handleDragEnd(event)"` : ''}>
-                        #${String(visualId).padStart(2, '0')}
-                    </div>
-
-                    <input type="checkbox" class="cyber-checkbox" ${task.is_completed ? 'checked' : ''}
-                           onclick="event.stopPropagation(); toggleComplete(${task.id}, this.checked)">
-
-                    <div class="task-name-container">
-                        <textarea rows="1" class="inline-input task-name-input p${task.priority}-text ${strikeClass}"
-                               onclick="event.stopPropagation();"
-                               onfocus="this.dataset.old = this.value; autoResizeTaskName(this);"
-                               oninput="autoResizeTaskName(this);"
-                               onblur="if(this.value !== this.dataset.old) { this.dataset.old = this.value; updateTask(${task.id}, 'name', this.value, true); }"
-                               onkeydown="if(event.key==='Enter') { event.preventDefault(); this.blur(); } else if(event.key==='Tab') { event.preventDefault(); this.closest('.task-row').querySelector('.date-input').focus(); }">${safeTaskName}</textarea>
-                    </div>
-
-                    <div class="priority-btn p${task.priority}-text ${strikeClass}" onclick="event.stopPropagation(); cyclePriority(${task.id}, ${task.priority})">
-                        P${task.priority}
-                    </div>
-
-                    <input type="text" class="inline-input date-input p${task.priority}-text ${strikeClass}"
-                       value="${formatDateDisplay(task.date)}"
-                       onclick="event.stopPropagation();"
-                       onfocus="this.value=''; this.placeholder=getHintDate('${task.date}');"
-                       onblur="handleDateBlur(${task.id}, this, '${task.date}')"
-                       onkeydown="if(event.key==='Enter') { this.dataset.enterPressed = 'true'; this.blur(); }">
-
-                    <button class="action-btn" onclick="event.stopPropagation(); promptDelete(${task.id})">×</button>
-                `;
+                const row = createTaskRowElement(task, visualId);
                 mBody.appendChild(row);
-                autoResizeTaskName(row.querySelector('.task-name-input'));
             });
         }
     }
 
     // 局部追加任务行，避免快捷键新建时重绘整板。
+    function isTaskDraggable(task) {
+        return !!task && !task.is_completed && typeof task.date === 'string' && task.date.endsWith('-99');
+    }
+
+    function syncTaskRowDragState(id) {
+        const task = tasksData.find(t => String(t.id) === String(id));
+        const row = document.querySelector(`.task-row[data-id='${id}']`);
+        if (!task || !row) return;
+
+        const canDrag = isTaskDraggable(task);
+        const handle = row.querySelector('.drag-handle');
+
+        row.classList.toggle('draggable-enabled', canDrag);
+        row.ondragover = canDrag ? (e) => handleDragOver(e, task.id) : null;
+        row.ondragleave = canDrag ? (e) => handleDragLeave(e) : null;
+        row.ondrop = canDrag ? (e) => handleDrop(e, task.id) : null;
+
+        if (handle) {
+            handle.classList.toggle('can-drag', canDrag);
+            handle.title = canDrag ? '按住此处拖拽排序' : '';
+            if (canDrag) {
+                handle.setAttribute('onpointerdown', `startPointerDrag(event, ${task.id})`);
+            } else {
+                handle.removeAttribute('onpointerdown');
+            }
+        }
+    }
+
     function createTaskRowElement(task, visualId) {
         const row = document.createElement('div');
         row.className = `task-row`;
@@ -1221,7 +1218,7 @@
 
         const strikeClass = task.is_completed ? 'strike' : '';
         const safeTaskName = escapeHtml(task.name);
-        const isDraggable = !task.is_completed && task.date.endsWith('-99');
+        const isDraggable = isTaskDraggable(task);
 
         if (isDraggable) {
             row.classList.add('draggable-enabled');
@@ -1233,7 +1230,7 @@
         row.innerHTML = `
             <div class="${isDraggable ? 'drag-handle can-drag' : 'drag-handle'}"
                  title="${isDraggable ? '按住此处拖拽排序' : ''}"
-                 ${isDraggable ? `draggable="true" ondragstart="handleDragStart(event, ${task.id})" ondragend="handleDragEnd(event)"` : ''}>
+                 ${isDraggable ? `onpointerdown="startPointerDrag(event, ${task.id})"` : ''}>
                 #${String(visualId).padStart(2, '0')}
             </div>
 
@@ -1545,7 +1542,12 @@
 
         // 先同步本地数据，防止延迟期间拖拽或操作读取到旧数据
         const task = tasksData.find(t => t.id === id);
-        if (task) task[field] = value;
+        if (task) {
+            task[field] = value;
+            if (field === 'date' || field === 'is_completed') {
+                syncTaskRowDragState(id);
+            }
+        }
 
         if (skipReload) {
             // 保持原样：静默更新（比如失去焦点保存名字），不刷新
@@ -1579,7 +1581,6 @@
             );
             await fetch(`/api/tasks/${deleteTargetId}`, {method: 'DELETE'});
             closeDeleteModal();
-            suppressNextRenderAnimation = true;
             await loadTasks();
             restoreViewportAnchor(viewportAnchor);
         }
@@ -1628,6 +1629,149 @@
     }
 
     // --- 拖拽逻辑函数 ---
+    async function reorderDraggedTask(draggedId, targetId, insertAfter) {
+        if (!draggedId || !targetId || String(draggedId) === String(targetId)) return false;
+
+        const draggedTask = tasksData.find(t => String(t.id) === String(draggedId));
+        const targetTask = tasksData.find(t => String(t.id) === String(targetId));
+        if (!draggedTask || !targetTask) return false;
+
+        const targetMonth = parseInt(targetTask.date.substring(5, 7));
+        let monthUndated = tasksData.filter(t =>
+            !t.is_completed &&
+            t.date.endsWith('-99') &&
+            parseInt(t.date.substring(5, 7)) === targetMonth
+        );
+
+        const fromIdx = monthUndated.findIndex(t => String(t.id) === String(draggedId));
+        const toIdx = monthUndated.findIndex(t => String(t.id) === String(targetId));
+        if (fromIdx === -1 || toIdx === -1) return false;
+
+        monthUndated.splice(fromIdx, 1);
+        const newToIdx = monthUndated.findIndex(t => String(t.id) === String(targetId));
+        monthUndated.splice(insertAfter ? newToIdx + 1 : newToIdx, 0, draggedTask);
+
+        const orderedIds = monthUndated.map(t => t.id);
+        await fetch('/api/tasks/reorder', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ids: orderedIds})
+        });
+        await loadTasks();
+        return true;
+    }
+
+    function clearDragIndicators() {
+        document.querySelectorAll('.task-row').forEach(r => {
+            r.classList.remove('drag-over-top', 'drag-over-bottom', 'pointer-dragging');
+        });
+    }
+
+    function startPointerDrag(e, id) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+        const row = e.currentTarget.closest('.task-row');
+        if (!row || !row.classList.contains('draggable-enabled')) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        window.getSelection().removeAllRanges();
+
+        draggedTaskId = id;
+        pointerDragState = {
+            id,
+            row,
+            startX: e.clientX,
+            startY: e.clientY,
+            targetId: null,
+            insertAfter: false,
+            isDragging: false
+        };
+
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        document.addEventListener('pointermove', handlePointerDragMove);
+        document.addEventListener('pointerup', finishPointerDrag);
+        document.addEventListener('pointercancel', cancelPointerDrag);
+    }
+
+    function handlePointerDragMove(e) {
+        if (!pointerDragState) return;
+
+        e.preventDefault();
+        const dx = e.clientX - pointerDragState.startX;
+        const dy = e.clientY - pointerDragState.startY;
+
+        if (!pointerDragState.isDragging) {
+            if (Math.hypot(dx, dy) < 4) return;
+            pointerDragState.isDragging = true;
+            pointerDragState.row.classList.add('pointer-dragging');
+            document.body.classList.add('is-reordering');
+        }
+
+        updatePointerDragTarget(e.clientX, e.clientY);
+        autoScrollDuringPointerDrag(e.clientY);
+    }
+
+    function updatePointerDragTarget(clientX, clientY) {
+        if (!pointerDragState) return;
+
+        document.querySelectorAll('.task-row').forEach(r => {
+            if (r !== pointerDragState.row) {
+                r.classList.remove('drag-over-top', 'drag-over-bottom');
+            }
+        });
+
+        const targetRow = document.elementFromPoint(clientX, clientY)?.closest('.task-row.draggable-enabled');
+        if (!targetRow || targetRow === pointerDragState.row) {
+            pointerDragState.targetId = null;
+            return;
+        }
+
+        const bounding = targetRow.getBoundingClientRect();
+        const insertAfter = clientY - bounding.top > bounding.height / 2;
+
+        targetRow.classList.toggle('drag-over-top', !insertAfter);
+        targetRow.classList.toggle('drag-over-bottom', insertAfter);
+        pointerDragState.targetId = targetRow.dataset.id;
+        pointerDragState.insertAfter = insertAfter;
+    }
+
+    function autoScrollDuringPointerDrag(clientY) {
+        const edge = 90;
+        const speed = 14;
+        if (clientY < edge) {
+            window.scrollBy({top: -speed, behavior: 'auto'});
+        } else if (clientY > window.innerHeight - edge) {
+            window.scrollBy({top: speed, behavior: 'auto'});
+        }
+    }
+
+    async function finishPointerDrag(e) {
+        if (!pointerDragState) return;
+
+        e.preventDefault();
+        const state = pointerDragState;
+        cleanupPointerDrag();
+
+        if (state.isDragging && state.targetId) {
+            await reorderDraggedTask(state.id, state.targetId, state.insertAfter);
+        }
+    }
+
+    function cancelPointerDrag() {
+        cleanupPointerDrag();
+    }
+
+    function cleanupPointerDrag() {
+        document.removeEventListener('pointermove', handlePointerDragMove);
+        document.removeEventListener('pointerup', finishPointerDrag);
+        document.removeEventListener('pointercancel', cancelPointerDrag);
+        document.body.classList.remove('is-reordering');
+        clearDragIndicators();
+        pointerDragState = null;
+        draggedTaskId = null;
+    }
+
     function handleDragStart(e, id) {
         draggedTaskId = id;
 
@@ -1690,28 +1834,7 @@
         const offset = e.clientY - bounding.top;
         const insertAfter = offset > bounding.height / 2;
 
-        const draggedTask = tasksData.find(t => t.id === draggedTaskId);
-        const targetTask = tasksData.find(t => t.id === targetId);
-
-        const targetMonth = parseInt(targetTask.date.substring(5, 7));
-        let monthUndated = tasksData.filter(t => !t.is_completed && t.date.endsWith('-99') && parseInt(t.date.substring(5, 7)) === targetMonth);
-
-        const fromIdx = monthUndated.findIndex(t => t.id === draggedTaskId);
-        const toIdx = monthUndated.findIndex(t => t.id === targetId);
-
-        if (fromIdx !== -1 && toIdx !== -1) {
-            monthUndated.splice(fromIdx, 1);
-            const newToIdx = monthUndated.findIndex(t => t.id === targetId);
-            monthUndated.splice(insertAfter ? newToIdx + 1 : newToIdx, 0, draggedTask);
-
-            const orderedIds = monthUndated.map(t => t.id);
-            await fetch('/api/tasks/reorder', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ids: orderedIds})
-            });
-            loadTasks();
-        }
+        await reorderDraggedTask(draggedTaskId, targetId, insertAfter);
     }
 
     // ================= 远期目标逻辑 =================
