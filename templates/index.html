@@ -745,6 +745,7 @@
     let revertGoalTimer = null; // 全局定时器
     let delayedSortTimer = null; // 用于延迟排序的全局定时器
     let delayedSortTime = 600000; // 延迟重排时间(1秒)
+    let pendingDateVisualAnchors = new Map();
     let suppressNextNewTaskAnimation = false;
 
     // 监听页面可见性（最小化/切换标签页）
@@ -753,7 +754,7 @@
         if (document.hidden && delayedSortTimer !== null) {
             clearTimeout(delayedSortTimer);
             delayedSortTimer = null;
-            loadTasks();
+            runDelayedSortNow();
         }
     });
 
@@ -782,16 +783,22 @@
     });
 
     // 改日期、勾选完成(延迟重排)
+    function runDelayedSortNow() {
+        pendingDateVisualAnchors.clear();
+        loadTasks();
+    }
+
     function scheduleDelayedSort() {
         clearTimeout(delayedSortTimer);
+        delayedSortTimer = null;
         if (document.hidden) {
             // 如果此时浏览器已经在后台，直接重排
-            loadTasks();
+            runDelayedSortNow();
         } else {
             // 否则开启 5 分钟倒计时
             delayedSortTimer = setTimeout(() => {
                 delayedSortTimer = null;
-                loadTasks();
+                runDelayedSortNow();
             }, delayedSortTime);
         }
     }
@@ -1009,6 +1016,53 @@
         else renderListView();
     }
 
+    function getTaskRenderDate(task) {
+        const anchorDate = pendingDateVisualAnchors.get(String(task.id));
+        return anchorDate && !task.is_completed ? anchorDate : task.date;
+    }
+
+    function normalizeTaskSortDate(dateStr) {
+        const parts = String(dateStr || '').split('-');
+        const y = parts[0] || '9999';
+        const m = (parts[1] || '99').padStart(2, '0');
+        const d = (parts[2] || '99').padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    function compareTasksForLocalRender(a, b) {
+        const dateA = getTaskRenderDate(a);
+        const dateB = getTaskRenderDate(b);
+        const keyA = [
+            a.is_completed === 1 ? 0 : 1,
+            dateA && dateA.endsWith('-99') ? 1 : 0,
+            normalizeTaskSortDate(dateA),
+            a.sort_order || 0,
+            a.id || 0
+        ];
+        const keyB = [
+            b.is_completed === 1 ? 0 : 1,
+            dateB && dateB.endsWith('-99') ? 1 : 0,
+            normalizeTaskSortDate(dateB),
+            b.sort_order || 0,
+            b.id || 0
+        ];
+
+        for (let i = 0; i < keyA.length; i++) {
+            if (keyA[i] < keyB[i]) return -1;
+            if (keyA[i] > keyB[i]) return 1;
+        }
+        return 0;
+    }
+
+    function moveTaskToLocalSortPosition(id) {
+        const currentIndex = tasksData.findIndex(t => String(t.id) === String(id));
+        if (currentIndex === -1) return;
+
+        const [task] = tasksData.splice(currentIndex, 1);
+        const insertIndex = tasksData.findIndex(other => compareTasksForLocalRender(task, other) < 0);
+        tasksData.splice(insertIndex === -1 ? tasksData.length : insertIndex, 0, task);
+    }
+
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, char => ({
             '&': '&amp;',
@@ -1157,8 +1211,10 @@
         task.is_completed = isCompleted ? 1 : 0;
         if (isCompleted) task.priority = 4;
 
-        // 重排后保持当前任务区域稳定，同时保留移动动画
-        await loadTasks();
+        // 只让当前勾选的任务立刻按完成状态移动；其它改过日期的未完成任务继续等待延迟重排
+        pendingDateVisualAnchors.delete(String(id));
+        moveTaskToLocalSortPosition(id);
+        renderWithAnimation();
         restoreViewportAnchor(viewportAnchor);
     }
 
@@ -1172,7 +1228,7 @@
             const mBody = document.getElementById(`m-body-${i + 1}`);
             mBody.innerHTML = '';
 
-            let monthTasks = tasksData.filter(t => parseInt(t.date.substring(5, 7)) === m);
+            let monthTasks = tasksData.filter(t => parseInt(String(getTaskRenderDate(t) || '').substring(5, 7)) === m);
 
             monthTasks.forEach((task, index) => {
                 const visualId = index + 1;
@@ -1342,7 +1398,7 @@
 
         for (let i = 1; i <= daysInMonth; i++) {
             const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-            const dayTasks = tasksData.filter(t => t.date === dateStr);
+            const dayTasks = tasksData.filter(t => getTaskRenderDate(t) === dateStr);
 
             const cell = document.createElement('div');
             cell.className = 'calendar-day';
@@ -1371,7 +1427,7 @@
         }
 
         const tbdDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-99`;
-        const tbdTasks = tasksData.filter(t => t.date === tbdDateStr);
+        const tbdTasks = tasksData.filter(t => getTaskRenderDate(t) === tbdDateStr);
         if (tbdTasks.length > 0) {
             const cell = document.createElement('div');
             cell.className = 'calendar-day';
@@ -1543,7 +1599,19 @@
         // 先同步本地数据，防止延迟期间拖拽或操作读取到旧数据
         const task = tasksData.find(t => t.id === id);
         if (task) {
+            if (field === 'date') {
+                const taskKey = String(id);
+                if (!pendingDateVisualAnchors.has(taskKey)) {
+                    pendingDateVisualAnchors.set(taskKey, task.date);
+                }
+            }
+
             task[field] = value;
+
+            if (field === 'date' && pendingDateVisualAnchors.get(String(id)) === value) {
+                pendingDateVisualAnchors.delete(String(id));
+            }
+
             if (field === 'date' || field === 'is_completed') {
                 syncTaskRowDragState(id);
             }
