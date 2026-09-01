@@ -1240,7 +1240,13 @@
 
     // 局部追加任务行，避免快捷键新建时重绘整板。
     function isTaskDraggable(task) {
-        return !!task && !task.is_completed && typeof task.date === 'string' && task.date.endsWith('-99');
+        return !!task && !task.is_completed && typeof getTaskRenderDate(task) === 'string';
+    }
+
+    function canReorderTasks(draggedTask, targetTask) {
+        return isTaskDraggable(draggedTask) &&
+            isTaskDraggable(targetTask) &&
+            getTaskRenderDate(draggedTask) === getTaskRenderDate(targetTask);
     }
 
     function syncTaskRowDragState(id) {
@@ -1702,24 +1708,22 @@
 
         const draggedTask = tasksData.find(t => String(t.id) === String(draggedId));
         const targetTask = tasksData.find(t => String(t.id) === String(targetId));
-        if (!draggedTask || !targetTask) return false;
+        if (!canReorderTasks(draggedTask, targetTask)) return false;
 
-        const targetMonth = parseInt(targetTask.date.substring(5, 7));
-        let monthUndated = tasksData.filter(t =>
-            !t.is_completed &&
-            t.date.endsWith('-99') &&
-            parseInt(t.date.substring(5, 7)) === targetMonth
+        const reorderDate = getTaskRenderDate(draggedTask);
+        let dayTasks = tasksData.filter(t =>
+            isTaskDraggable(t) && getTaskRenderDate(t) === reorderDate
         );
 
-        const fromIdx = monthUndated.findIndex(t => String(t.id) === String(draggedId));
-        const toIdx = monthUndated.findIndex(t => String(t.id) === String(targetId));
+        const fromIdx = dayTasks.findIndex(t => String(t.id) === String(draggedId));
+        const toIdx = dayTasks.findIndex(t => String(t.id) === String(targetId));
         if (fromIdx === -1 || toIdx === -1) return false;
 
-        monthUndated.splice(fromIdx, 1);
-        const newToIdx = monthUndated.findIndex(t => String(t.id) === String(targetId));
-        monthUndated.splice(insertAfter ? newToIdx + 1 : newToIdx, 0, draggedTask);
+        dayTasks.splice(fromIdx, 1);
+        const newToIdx = dayTasks.findIndex(t => String(t.id) === String(targetId));
+        dayTasks.splice(insertAfter ? newToIdx + 1 : newToIdx, 0, draggedTask);
 
-        const orderedIds = monthUndated.map(t => t.id);
+        const orderedIds = dayTasks.map(t => t.id);
         await fetch('/api/tasks/reorder', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1795,6 +1799,13 @@
             return;
         }
 
+        const draggedTask = tasksData.find(t => String(t.id) === String(pointerDragState.id));
+        const targetTask = tasksData.find(t => String(t.id) === String(targetRow.dataset.id));
+        if (!canReorderTasks(draggedTask, targetTask)) {
+            pointerDragState.targetId = null;
+            return;
+        }
+
         const bounding = targetRow.getBoundingClientRect();
         const insertAfter = clientY - bounding.top > bounding.height / 2;
 
@@ -1866,8 +1877,10 @@
     }
 
     function handleDragOver(e, id) {
+        const draggedTask = tasksData.find(t => String(t.id) === String(draggedTaskId));
+        const targetTask = tasksData.find(t => String(t.id) === String(id));
+        if (id === draggedTaskId || !canReorderTasks(draggedTask, targetTask)) return;
         e.preventDefault();
-        if (id === draggedTaskId) return;
 
         // 👇 核心修复：精准排他！在亮起当前行之前，强制拔掉其他所有行的发光状态，防止多行同时亮起
         document.querySelectorAll('.task-row').forEach(r => {
@@ -1896,6 +1909,10 @@
         e.preventDefault();
         e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
         if (!draggedTaskId || draggedTaskId === targetId) return;
+
+        const draggedTask = tasksData.find(t => String(t.id) === String(draggedTaskId));
+        const targetTask = tasksData.find(t => String(t.id) === String(targetId));
+        if (!canReorderTasks(draggedTask, targetTask)) return;
 
         const row = e.currentTarget;
         const bounding = row.getBoundingClientRect();
